@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build
+.next/
+.open-next/
+out/
+
+# Env
+.env
+.env.local
+.env*.local
+
+# Cache
+.cache/
+
+
+# OS
+.DS_Store

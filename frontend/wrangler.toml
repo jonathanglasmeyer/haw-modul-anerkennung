@@ -1,0 +1,19 @@
+name = "stephan-anerkennung"
+main = ".open-next/worker.js"
+compatibility_date = "2025-09-15"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "anerkennung.quietloop.dev/*"
+custom_domain = true
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[vars]
+NODE_ENV = "production"
+
+[env.production]
+compatibility_date = "2025-09-15"
+compatibility_flags = ["nodejs_compat"]

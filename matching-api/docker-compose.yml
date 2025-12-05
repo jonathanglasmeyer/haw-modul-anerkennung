@@ -1,0 +1,34 @@
+services:
+  stephan-matching-api:
+    build: .
+    container_name: stephan-matching-api
+    restart: unless-stopped
+    ports:
+      - "3008:3008"  # For local testing; on Hetzner Caddy routes via internal network
+    environment:
+      - PORT=3008
+      - VECTORSTORE_PATH=/data/vectorstore
+      - CHROMADB_PERSISTENT=1
+      - SYNC_ON_STARTUP=1
+      # API keys from .env file (passed through)
+      - AIRTABLE_API_KEY=${AIRTABLE_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    env_file:
+      - .env
+    volumes:
+      - vectorstore_data:/data
+    networks:
+      - quietloop-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3008/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  vectorstore_data:
+
+networks:
+  quietloop-network:
+    external: true
