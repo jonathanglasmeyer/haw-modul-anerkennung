@@ -9,6 +9,10 @@ __pycache__/
 *.so
 .Python
 
+# Data & Archives
+data/archiv/
+data/kern/
+
 # Vector Store
 matching-api/data/vectorstore/*.bin
 matching-api/data/vectorstore/*.sqlite3
