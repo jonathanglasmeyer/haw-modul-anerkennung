@@ -42,9 +42,9 @@ FastAPI + ChromaDB + Gemini. Auth via `X-API-Key` header.
 
 **Vergleichskriterien:** Lernziele (≥80%→vollständig, ≥50%→teilweise, <50%→keine); Credits extern≥intern OK; Bachelor/Master muss passen.
 
-**Performance:** `thinking_budget=1000` (nicht dynamic=default); ~6s für 2-Unit-Vergleich parallel.
+**LLM:** `gemini-flash-latest` (Gemini 2.5 Flash); ~6s für 2-Unit-Vergleich parallel.
 
-**Deployment:** Hetzner VPS via `./deploy.sh`. URL: `https://matching-api.quietloop.dev`. Port 3008. Env: `GEMINI_API_KEY`, `AIRTABLE_API_KEY`, `SYNC_ON_STARTUP=1`
+**Deployment:** Hetzner VPS auto-deploy via GitHub Actions (`.github/workflows/deploy.yml`) on push to `main`. URL: `https://matching-api.quietloop.dev`. Port 3008. Env: `GEMINI_API_KEY`, `AIRTABLE_API_KEY`, `SYNC_ON_STARTUP=1`
 
 **Local Development:**
 - `uv run` requires `--env-file .env` flag (doesn't auto-load like python-dotenv)
