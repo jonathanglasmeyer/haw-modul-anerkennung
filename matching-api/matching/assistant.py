@@ -274,7 +274,6 @@ Kriterien:
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=SINGLE_COMPARISON_SCHEMA,
-                    thinking_config=types.ThinkingConfig(thinking_budget=-1),
                 ),
             )
 
@@ -307,7 +306,10 @@ Kriterien:
         Returns:
             List of comparison results, one per unit
         """
+        total_start = time.time()
+
         # Get all internal units
+        db_start = time.time()
         units_data = []
         for unit_id in unit_ids:
             internal = self.collection.get(
@@ -320,11 +322,13 @@ Kriterien:
                     "doc": internal["documents"][0],
                     "meta": internal["metadatas"][0]
                 })
+        db_time = time.time() - db_start
 
         if not units_data:
-            return []
+            return {"results": [], "timing": {}}
 
         # Format external module
+        format_start = time.time()
         external_text = self._format_module_for_comparison(external_module, is_external=True)
 
         # Format all internal units
@@ -337,6 +341,7 @@ Credits: {u['meta'].get('credits')}
 {u['doc'][:1500]}
 
 """
+        format_time = time.time() - format_start
 
         prompt = f"""Prüfe Anerkennbarkeit: Externes Modul → {len(units_data)} interne Units.
 
@@ -370,22 +375,24 @@ Kriterien:
 """
 
         try:
-            start = time.time()
+            llm_start = time.time()
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=COMPARISON_SCHEMA,
-                    thinking_config=types.ThinkingConfig(thinking_budget=-1),
+                    thinking_config=types.ThinkingConfig(thinking_budget=1000),
                 ),
             )
-            llm_time = time.time() - start
+            llm_time = time.time() - llm_start
 
+            parse_start = time.time()
             result_text = response.candidates[0].content.parts[0].text
             results = json.loads(result_text)
+            parse_time = time.time() - parse_start
 
             # Enrich with metadata including unit details for side-by-side comparison
+            enrich_start = time.time()
             data_by_id = {u['unit_id']: u for u in units_data}
             for r in results:
                 unit_data = data_by_id.get(r['unit_id'], {})
@@ -396,12 +403,19 @@ Kriterien:
                 r['unit_sws'] = meta.get('sws')
                 r['unit_workload'] = meta.get('workload')
                 r['unit_content'] = unit_data.get('doc', '')[:2000]  # First 2000 chars for display
+            enrich_time = time.time() - enrich_start
 
-            logger.info(f"Compare LLM call completed in {llm_time:.3f}s ({len(results)} units)")
+            total_time = time.time() - total_start
+
             return {
                 "results": results,
                 "timing": {
-                    "compare_llm_ms": round(llm_time * 1000, 1)
+                    "db_ms": round(db_time * 1000, 1),
+                    "format_ms": round(format_time * 1000, 1),
+                    "llm_ms": round(llm_time * 1000, 1),
+                    "parse_ms": round(parse_time * 1000, 1),
+                    "enrich_ms": round(enrich_time * 1000, 1),
+                    "total_ms": round(total_time * 1000, 1),
                 }
             }
 
