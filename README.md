@@ -42,12 +42,10 @@ npm run dev  # Dev-Server (Port 3000)
 - **Backend**: Hetzner VPS (https://matching-api.quietloop.dev) - Auto-Deploy bei push auf `main`
 - **Frontend**: Lokal (Development)
 
-Siehe [.github/DEPLOYMENT.md](.github/DEPLOYMENT.md) für Auto-Deploy Setup.
-
 ## Technologien
 
 - **Embeddings**: Gemini `gemini-embedding-001`
-- **LLM**: Gemini `gemini-2.0-flash-thinking-exp-1219`
+- **LLM**: `gemini-flash-latest` (Gemini 2.5 Flash)
 - **Vector-Store**: ChromaDB (lokal)
 - **PDF**: reportlab
 - **Frontend**: Next.js 15, Tailwind, shadcn/ui
