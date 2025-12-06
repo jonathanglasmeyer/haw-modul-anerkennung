@@ -14,7 +14,6 @@ from reportlab.lib.colors import HexColor
 
 load_dotenv()
 
-# Auto-deploy test
 # API Key auth
 API_KEY = os.environ.get("API_KEY")
 
