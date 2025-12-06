@@ -1,0 +1,42 @@
+name: Deploy to Hetzner
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'matching-api/**'
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to Hetzner
+        run: |
+          cd matching-api
+          ssh -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "cd ~/stephan-matching-api && git pull origin main && docker compose down && docker compose up -d --build"
+
+      - name: Health Check
+        run: |
+          sleep 10
+          for i in {1..12}; do
+            if curl -sf https://matching-api.quietloop.dev/health > /dev/null; then
+              echo "Service is healthy!"
+              exit 0
+            fi
+            echo "Attempt $i/12..."
+            sleep 5
+          done
+          echo "Service failed to become healthy"
+          exit 1

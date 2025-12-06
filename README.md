@@ -39,8 +39,10 @@ npm run dev  # Dev-Server (Port 3000)
 
 ## Deployment
 
-- **Backend**: Hetzner VPS (https://matching-api.quietloop.dev)
-- **Frontend**: Vercel (geplant)
+- **Backend**: Hetzner VPS (https://matching-api.quietloop.dev) - Auto-Deploy bei push auf `main`
+- **Frontend**: Lokal (Development)
+
+Siehe [.github/DEPLOYMENT.md](.github/DEPLOYMENT.md) für Auto-Deploy Setup.
 
 ## Technologien
 
