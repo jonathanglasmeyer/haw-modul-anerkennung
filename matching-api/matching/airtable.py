@@ -9,6 +9,7 @@ from pathlib import Path
 AIRTABLE_BASE_ID = "appoawrI73padNkWy"
 UNITS_TABLE = "tblbUxQbNAkGRxdT0"  # Unit table ID
 MODULES_TABLE = "tblNwW2NWEnSdnyzM"  # Module table ID
+PERSONEN_TABLE = "tblnxTBLXdiLNuInM"  # Personen table ID
 CACHE_FILE = "airtable_cache.json"
 
 
@@ -106,6 +107,12 @@ def fetch_units_from_airtable(cache_dir: str = "./data", force_refresh: bool = F
 
     print(f"Fetching fresh data from Airtable...")
 
+    # Fetch personen for lookup
+    personen_records = fetch_all_records(PERSONEN_TABLE)
+    personen_lookup = {}
+    for record in personen_records:
+        personen_lookup[record["id"]] = record.get("fields", {}).get("Name", "")
+
     # Fetch modules
     module_records = fetch_all_records(MODULES_TABLE)
 
@@ -138,6 +145,10 @@ def fetch_units_from_airtable(cache_dir: str = "./data", force_refresh: bool = F
             module_record_id = module_links[0] if module_links else None
             module_id = module_by_record_id.get(module_record_id, "")
 
+            # Resolve verantwortliche IDs to names
+            uv_ids = fields.get("UV-Verantwortliche", [])
+            verantwortliche = [personen_lookup.get(pid, "") for pid in uv_ids if personen_lookup.get(pid)]
+
             units[unit_id] = {
                 "airtable_id": record["id"],
                 "title": fields.get("Titel", ""),
@@ -149,6 +160,7 @@ def fetch_units_from_airtable(cache_dir: str = "./data", force_refresh: bool = F
                 "lehrsprache": fields.get("Lehrsprache", ""),
                 "learning_outcomes_text": fields.get("Lernziele", ""),
                 "content": fields.get("Inhalte", ""),
+                "verantwortliche": verantwortliche,
             }
 
     # Save to cache

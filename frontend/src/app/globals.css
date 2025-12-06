@@ -1,1 +1,37 @@
 @import "../styles/tailwind.css";
+
+@media print {
+  @page {
+    margin: 1.5cm;
+  }
+
+  body {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  /* Hide navigation, buttons, etc */
+  nav, button, .no-print {
+    display: none !important;
+  }
+
+  /* Show only results section */
+  main > * {
+    display: none !important;
+  }
+
+  main section:last-child {
+    display: block !important;
+  }
+
+  /* Clean layout for print */
+  .card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Better spacing */
+  h1, h2, h3 {
+    page-break-after: avoid;
+  }
+}

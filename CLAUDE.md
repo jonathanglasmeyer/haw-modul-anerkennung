@@ -38,11 +38,19 @@ FastAPI + ChromaDB + Gemini. Auth via `X-API-Key` header.
 - `GET /health` - Health check (public)
 - `POST /match` - Vector-Search für Top-N Units
 - `POST /parse` - Externes Modul → strukturiertes JSON
-- `POST /compare-multiple` - LLM-Vergleich: externes Modul vs. N interne Units
+- `POST /compare-multiple` - Parallele Single-Calls (ThreadPoolExecutor); jede Unit unabhängig bewertet
 
 **Vergleichskriterien:** Lernziele (≥80%→vollständig, ≥50%→teilweise, <50%→keine); Credits extern≥intern OK; Bachelor/Master muss passen.
 
+**Performance:** `thinking_budget=1000` (nicht dynamic=default); ~6s für 2-Unit-Vergleich parallel.
+
 **Deployment:** Hetzner VPS via `./deploy.sh`. URL: `https://matching-api.quietloop.dev`. Port 3008. Env: `GEMINI_API_KEY`, `AIRTABLE_API_KEY`, `SYNC_ON_STARTUP=1`
+
+**Local Development:**
+- `uv run` requires `--env-file .env` flag (doesn't auto-load like python-dotenv)
+- ChromaDB needs `CHROMADB_PERSISTENT=1` in .env; otherwise in-memory (data lost)
+- Commands: `uv run --env-file .env python app.py`, `uv run --env-file .env python scripts/load_units.py --force`
+- Gemini caching not viable (units ~576 tokens < 2048 minimum)
 
 ## Frontend (geplant)
 
@@ -66,13 +74,13 @@ fetch(process.env.MATCHING_API_URL + '/match', {
 
 ## Airtable
 
-**Base:** `appoawrI73padNkWy`
+**Base:** Siehe `.env` für Base ID
 
-| Tabelle | ID | Zweck |
-|---------|-----|-------|
-| Personen | `tblnxTBLXdiLNuInM` | Profs/Verantwortliche |
-| Module | `tblNwW2NWEnSdnyzM` | Modul-Metadaten |
-| Units | `tblbUxQbNAkGRxdT0` | Unit-Ebene + Verantwortliche |
+| Tabelle | Zweck |
+|---------|-------|
+| Personen | Profs/Verantwortliche |
+| Module | Modul-Metadaten |
+| Units | Unit-Ebene + Verantwortliche |
 
 **Zugriff:** `source .env && AIRTABLE_API_KEY="$AIRTABLE_API_KEY" mcporter airtable.<tool>`
 

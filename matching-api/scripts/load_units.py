@@ -20,7 +20,7 @@ def main():
     if force:
         print("Force refresh enabled")
 
-    count = sync_from_airtable(persist_dir=persist_dir, force_refresh=force)
+    count = sync_from_airtable(force_refresh=force)
     print(f"Done! {count} units in ChromaDB")
 
 

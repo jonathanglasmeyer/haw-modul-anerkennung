@@ -160,6 +160,7 @@ def sync_from_airtable(force_refresh: bool = False) -> int:
         document = "\n\n".join(content_parts)
 
         # Metadata for filtering and display
+        verantwortliche = unit.get("verantwortliche", [])
         metadata = {
             "unit_id": unit_id,
             "unit_title": unit.get("title", ""),
@@ -172,6 +173,7 @@ def sync_from_airtable(force_refresh: bool = False) -> int:
             "lehrsprache": str(unit.get("lehrsprache", "")),
             "pruefungsleistung": str(module.get("pruefungsleistung", ""))[:200],
             "studiengang": "BAPuMa",
+            "verantwortliche": ", ".join(verantwortliche) if verantwortliche else "",
         }
 
         documents.append(document)

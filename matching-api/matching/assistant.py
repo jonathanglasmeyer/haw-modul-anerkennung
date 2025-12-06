@@ -117,8 +117,9 @@ class MatchingAssistant:
                 "sws": meta.get("sws"),
                 "credits": meta.get("credits"),
                 "workload": meta.get("workload"),
+                "verantwortliche": meta.get("verantwortliche", ""),
                 "similarity": round(similarity, 3),
-                "content_preview": doc[:500] + "..." if len(doc) > 500 else doc
+                "doc": doc
             })
 
         logger.info(f"Vector search completed in {query_time:.3f}s (embedding + query)")
@@ -228,7 +229,7 @@ Dokument:
         internal_doc = internal["documents"][0]
         internal_meta = internal["metadatas"][0]
 
-        # Format modules for comparison
+        # Format external module and internal unit
         external_text = self._format_module_for_comparison(external_module, is_external=True)
         internal_text = f"""**Unit:** {internal_meta.get('unit_title')}
 **Modul:** {internal_meta.get('module_title')}
@@ -240,20 +241,20 @@ Dokument:
 **Inhalt:**
 {internal_doc}"""
 
-        prompt = """Prüfe, ob externes Modul auf interne Unit anerkennbar ist. Liefere JSON nach Schema:
-{
+        prompt = f"""Prüfe, ob externes Modul auf interne Unit anerkennbar ist. Liefere JSON nach Schema:
+{{
   "lernziele_match": 0-100,
   "empfehlung": "vollständig"|"teilweise"|"keine",
   "lernziele": [
-    {"ziel": "Unit-Ziel", "status": "✓|~|✗", "note": "1 Satz warum"}
+    {{"ziel": "Unit-Ziel", "status": "✓|~|✗", "note": "1 Satz warum"}}
   ],
-  "credits": {"extern": Zahl|null, "intern": Zahl|null, "bewertung": "OK/Problem + 1 Satz"},
+  "credits": {{"extern": Zahl|null, "intern": Zahl|null, "bewertung": "OK/Problem + 1 Satz"}},
   "niveau": "Bachelor/Master Bewertung, 1 Satz",
   "pruefung": "Prüfungsform-Vergleich, 1 Satz",
   "workload": "Workload-Einordnung, 1 Satz",
   "defizite": ["konkrete Lücke 1", "…"],
   "fazit": "2-3 Sätze, klare Begründung + Empfehlung"
-}
+}}
 
 Kriterien:
 - Lernziele: ≥80% → vollständig, ≥50% → teilweise, <50% → keine
@@ -262,19 +263,23 @@ Kriterien:
 - Max 3 Defizite, sachlich, keine Floskeln.
 
 ## Externes Modul
-""" + external_text + """
+{external_text}
 
 ## Interne Unit
-""" + internal_text
+{internal_text}"""
 
         try:
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=SINGLE_COMPARISON_SCHEMA,
+                thinking_config=types.ThinkingConfig(thinking_budget=1000),
+                temperature=0,  # Deterministic output
+            )
+
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=SINGLE_COMPARISON_SCHEMA,
-                ),
+                config=config,
             )
 
             content = response.candidates[0].content.parts[0].text
@@ -297,15 +302,17 @@ Kriterien:
             }
 
     def compare_multiple(self, external_module: dict, unit_ids: list[str]) -> list[dict]:
-        """Compare external module with multiple internal units in one LLM call.
+        """Compare external module with multiple internal units using parallel single calls.
 
         Args:
             external_module: Parsed external module data
             unit_ids: List of unit IDs to compare against
 
         Returns:
-            List of comparison results, one per unit
+            List of comparison results with timing metadata
         """
+        import concurrent.futures
+
         total_start = time.time()
 
         # Get all internal units
@@ -327,83 +334,92 @@ Kriterien:
         if not units_data:
             return {"results": [], "timing": {}}
 
-        # Format external module
-        format_start = time.time()
-        external_text = self._format_module_for_comparison(external_module, is_external=True)
+        # Parallel LLM calls (one per unit)
+        def compare_single_unit(unit_data):
+            """Helper to compare one unit."""
+            llm_start = time.time()
+            external_text = self._format_module_for_comparison(external_module, is_external=True)
 
-        # Format all internal units
-        units_text = ""
-        for i, u in enumerate(units_data, 1):
-            units_text += f"""
-### Unit {i}: {u['meta'].get('unit_title')} ({u['unit_id']})
-Modul: {u['meta'].get('module_title')}
-Credits: {u['meta'].get('credits')}
-{u['doc'][:1500]}
+            # Format internal unit content
+            internal_text = f"""**Unit:** {unit_data['meta'].get('unit_title')}
+**Modul:** {unit_data['meta'].get('module_title')}
+**Credits:** {unit_data['meta'].get('credits')}
+**SWS:** {unit_data['meta'].get('sws')}
+**Workload:** {unit_data['meta'].get('workload')}
+**Prüfung:** {unit_data['meta'].get('pruefungsleistung')}
 
-"""
-        format_time = time.time() - format_start
+**Inhalt:**
+{unit_data['doc']}"""
 
-        prompt = f"""Prüfe Anerkennbarkeit: Externes Modul → {len(units_data)} interne Units.
-
-WICHTIG: Gib GENAU {len(units_data)} Ergebnisse zurück (eins pro Unit) im JSON-Schema:
-[
-  {{
-    "unit_id": "...",
-    "lernziele_match": 0-100,
-    "empfehlung": "vollständig"|"teilweise"|"keine",
-    "lernziele": [{{"ziel": "Unit-Ziel", "status": "✓|~|✗", "note": "1 Satz"}}],
-    "credits": {{"extern": Zahl|null, "intern": Zahl|null, "bewertung": "OK/Problem + 1 Satz"}},
-    "niveau": "1 Satz zur Passung",
-    "pruefung": "1 Satz zum Prüfungsvergleich",
-    "workload": "1 Satz zur Arbeitsbelastung",
-    "defizite": ["Lücke 1", "..."],
-    "fazit": "2-3 Sätze, klare Begründung + Empfehlung"
-  }}
-]
+            prompt = f"""Prüfe, ob externes Modul auf interne Unit anerkennbar ist. Liefere JSON nach Schema:
+{{
+  "unit_id": "{unit_data['unit_id']}",
+  "lernziele_match": 0-100,
+  "empfehlung": "vollständig"|"teilweise"|"keine",
+  "lernziele": [
+    {{"ziel": "Unit-Ziel", "status": "✓|~|✗", "note": "1 Satz warum"}}
+  ],
+  "credits": {{"extern": Zahl|null, "intern": Zahl|null, "bewertung": "OK/Problem + 1 Satz"}},
+  "niveau": "Bachelor/Master Bewertung, 1 Satz",
+  "pruefung": "Prüfungsform-Vergleich, 1 Satz",
+  "workload": "Workload-Einordnung, 1 Satz",
+  "defizite": ["konkrete Lücke 1", "…"],
+  "fazit": "2-3 Sätze, klare Begründung + Empfehlung"
+}}
 
 Kriterien:
-- Lernziele: ≥80% → vollständig, ≥50% → teilweise, <50% → keine
-- Credits: extern ≥ intern = OK (bis ~10% Differenz tolerierbar)
-- Niveau/Prüfung/Workload nur erwähnen, wenn relevant für Entscheidung
+- Lernziele: ≥85% UND alle Kernlernziele → vollständig, ≥50% → teilweise, <50% → keine
+- GRENZFÄLLE (75-84%): Wenn Zweifel oder Kernlernziele fehlen → IMMER "teilweise"
+- Credits: Extern ≥ Intern OK, bis ~10% Diff tolerierbar
+- Niveau/Prüfung/Workload nur erwähnen wenn relevant
 - Max 3 Defizite, sachlich, keine Floskeln.
 
 ## Externes Modul
 {external_text}
 
-## Interne Units
-{units_text}
-"""
+## Interne Unit
+{internal_text}"""
 
-        try:
-            llm_start = time.time()
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=SINGLE_COMPARISON_SCHEMA,
+                thinking_config=types.ThinkingConfig(thinking_budget=1000),
+                temperature=0,  # Deterministic output
+            )
+
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_budget=1000),
-                ),
+                config=config,
             )
+
+            content = response.candidates[0].content.parts[0].text
+            result = json.loads(content)
             llm_time = time.time() - llm_start
 
-            parse_start = time.time()
-            result_text = response.candidates[0].content.parts[0].text
-            results = json.loads(result_text)
-            parse_time = time.time() - parse_start
+            # Enrich with metadata
+            result['unit_id'] = unit_data['unit_id']  # Add unit_id from data
+            result['unit_title'] = unit_data['meta'].get('unit_title', '')
+            result['module_title'] = unit_data['meta'].get('module_title', '')
+            result['unit_credits'] = unit_data['meta'].get('credits')
+            result['unit_sws'] = unit_data['meta'].get('sws')
+            result['unit_workload'] = unit_data['meta'].get('workload')
+            result['verantwortliche'] = unit_data['meta'].get('verantwortliche', '')
+            result['unit_content'] = unit_data['doc'][:2000]
 
-            # Enrich with metadata including unit details for side-by-side comparison
-            enrich_start = time.time()
-            data_by_id = {u['unit_id']: u for u in units_data}
-            for r in results:
-                unit_data = data_by_id.get(r['unit_id'], {})
-                meta = unit_data.get('meta', {})
-                r['unit_title'] = meta.get('unit_title', '')
-                r['module_title'] = meta.get('module_title', '')
-                r['unit_credits'] = meta.get('credits')
-                r['unit_sws'] = meta.get('sws')
-                r['unit_workload'] = meta.get('workload')
-                r['unit_content'] = unit_data.get('doc', '')[:2000]  # First 2000 chars for display
-            enrich_time = time.time() - enrich_start
+            return result, llm_time
+
+        try:
+            # Execute all comparisons in parallel using ThreadPoolExecutor
+            llm_start = time.time()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(units_data)) as executor:
+                futures = [executor.submit(compare_single_unit, u) for u in units_data]
+                results_with_timing = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+            results = [r[0] for r in results_with_timing]
+            llm_times = [r[1] for r in results_with_timing]
+            total_llm_time = time.time() - llm_start  # Wall-clock time (parallel)
+            avg_llm_time = sum(llm_times) / len(llm_times) if llm_times else 0
 
             total_time = time.time() - total_start
 
@@ -411,16 +427,15 @@ Kriterien:
                 "results": results,
                 "timing": {
                     "db_ms": round(db_time * 1000, 1),
-                    "format_ms": round(format_time * 1000, 1),
-                    "llm_ms": round(llm_time * 1000, 1),
-                    "parse_ms": round(parse_time * 1000, 1),
-                    "enrich_ms": round(enrich_time * 1000, 1),
+                    "llm_ms": round(total_llm_time * 1000, 1),  # Parallel wall-clock time
+                    "avg_llm_per_unit_ms": round(avg_llm_time * 1000, 1),
                     "total_ms": round(total_time * 1000, 1),
                 }
             }
 
         except Exception as e:
-            return {"results": [{"error": str(e)}], "timing": {}}
+            logger.error(f"Error in compare_multiple: {e}")
+            return {"results": [], "timing": {}, "error": str(e)}
 
     def _format_module_for_comparison(self, module: dict, is_external: bool = True) -> str:
         """Format module data for LLM comparison."""

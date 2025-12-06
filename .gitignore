@@ -1,2 +1,20 @@
+# Environment
 .env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Vector Store
+matching-api/data/vectorstore/*.bin
+matching-api/data/vectorstore/*.sqlite3
+matching-api/data/vectorstore/*/
+
+# Build
 frontend/tsconfig.tsbuildinfo
+frontend/.next/
+frontend/out/

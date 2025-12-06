@@ -2,9 +2,15 @@
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+from reportlab.lib.colors import HexColor
 
 load_dotenv()
 
@@ -33,6 +39,10 @@ class MatchAndCompareRequest(BaseModel):
 class CompareMultipleRequest(BaseModel):
     external_module: dict
     unit_ids: list[str]
+
+class ExportPDFRequest(BaseModel):
+    external_module: dict
+    results: list[dict]
 
 
 # Global assistant instance
@@ -115,13 +125,15 @@ async def compare_modules(request: CompareRequest):
 
 @app.post("/compare-multiple")
 async def compare_multiple(request: CompareMultipleRequest):
-    """Compare external module with multiple internal units in one LLM call."""
+    """Compare external module with multiple internal units using parallel calls."""
     assistant = get_assistant()
     result = assistant.compare_multiple(
         request.external_module,
         request.unit_ids
     )
-    if result.get("results") and "error" in result["results"][0]:
+    if result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+    if result.get("results") and len(result["results"]) > 0 and "error" in result["results"][0]:
         raise HTTPException(status_code=500, detail=result["results"][0]["error"])
     return result
 
@@ -153,6 +165,209 @@ async def match_and_compare(request: MatchAndCompareRequest):
         result["comparison"] = comparison
 
     return result
+
+
+@app.post("/export-pdf")
+async def export_pdf(request: ExportPDFRequest, req: Request):
+    if API_KEY and req.headers.get("x-api-key") != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    # Generate PDF
+    pdf_bytes = generate_pdf(request.external_module, request.results)
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline; filename=anerkennungsantrag.pdf"}
+    )
+
+
+def generate_pdf(external_module: dict, results: list[dict]) -> bytes:
+    """Generate PDF using reportlab"""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm)
+
+    story = []
+    styles = getSampleStyleSheet()
+
+    # Custom styles - NO ITALIC!
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Normal'],
+        fontSize=20,
+        fontName='Helvetica-Bold',
+        textColor=HexColor('#1a1a1a'),
+        spaceAfter=12
+    )
+
+    subtitle_style = ParagraphStyle(
+        'Subtitle',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor=HexColor('#6b7280'),
+        spaceAfter=20
+    )
+
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Normal'],
+        fontSize=16,
+        fontName='Helvetica-Bold',
+        textColor=HexColor('#374151'),
+        spaceBefore=20,
+        spaceAfter=12
+    )
+
+    unit_title_style = ParagraphStyle(
+        'UnitTitle',
+        parent=styles['Normal'],
+        fontSize=14,
+        fontName='Helvetica-Bold',
+        textColor=HexColor('#1a1a1a'),
+        spaceBefore=10,
+        spaceAfter=6,
+        leading=18
+    )
+
+    detail_heading_style = ParagraphStyle(
+        'DetailHeading',
+        parent=styles['Normal'],
+        fontSize=11,
+        fontName='Helvetica-Bold',
+        textColor=HexColor('#1a1a1a'),
+        spaceBefore=4,
+        spaceAfter=2
+    )
+
+    # Title
+    story.append(Paragraph("Anerkennungsantrag", title_style))
+    story.append(Paragraph("HAW Hamburg - Anerkennung externer Module", subtitle_style))
+
+    # External Module
+    story.append(Paragraph("Externes Modul", heading_style))
+    story.append(Spacer(1, 0.3*cm))
+
+    mod_title = f"<b>{external_module.get('title', 'N/A')}</b>"
+    story.append(Paragraph(mod_title, styles['Normal']))
+    story.append(Spacer(1, 0.2*cm))
+
+    # Add module details
+    details = []
+    if external_module.get('credits'):
+        details.append(f"Credits: {external_module['credits']}")
+    if external_module.get('workload'):
+        details.append(f"Workload: {external_module['workload']}")
+    if external_module.get('level'):
+        details.append(f"Niveau: {external_module['level']}")
+    if external_module.get('assessment'):
+        details.append(f"Prüfung: {external_module['assessment']}")
+    if external_module.get('institution'):
+        details.append(f"Institution: {external_module['institution']}")
+
+    if details:
+        story.append(Paragraph(" | ".join(details), styles['Normal']))
+        story.append(Spacer(1, 0.3*cm))
+
+    # Learning goals
+    if external_module.get('learning_goals'):
+        story.append(Paragraph("<b>Lernziele:</b>", styles['Normal']))
+        story.append(Spacer(1, 0.1*cm))
+        for goal in external_module['learning_goals']:
+            story.append(Paragraph(f"• {goal}", styles['Normal']))
+        story.append(Spacer(1, 0.3*cm))
+
+    # Internal modules
+    story.append(Paragraph("Interne Module - Assessment", heading_style))
+
+    for idx, result in enumerate(results, 1):
+        story.append(Spacer(1, 0.5*cm))
+
+        unit_title = f"<b>{idx}. {result.get('unit_title', 'N/A')}</b>"
+        story.append(Paragraph(unit_title, unit_title_style))
+
+        if result.get('module_title'):
+            story.append(Paragraph(f"Modul: {result['module_title']}", styles['Normal']))
+
+        story.append(Spacer(1, 0.2*cm))
+
+        # Empfehlung
+        empf = result.get('empfehlung', '')
+        empf_text = "Vollständige Anerkennung" if empf == "vollständig" else "Teilweise Anerkennung" if empf == "teilweise" else "Keine Anerkennung"
+        story.append(Paragraph(f"<b>Empfehlung: {empf_text}</b>", styles['Normal']))
+
+        story.append(Spacer(1, 0.1*cm))
+
+        # Metadaten Grid
+        meta_parts = [f"<b>Lernziele Match:</b> {result.get('lernziele_match', 'N/A')}%"]
+        if result.get('unit_credits') is not None:
+            meta_parts.append(f"<b>Credits (intern):</b> {result['unit_credits']}")
+        if result.get('unit_sws') is not None:
+            meta_parts.append(f"<b>SWS:</b> {result['unit_sws']}")
+        if result.get('unit_workload'):
+            meta_parts.append(f"<b>Workload:</b> {result['unit_workload']}")
+        if result.get('verantwortliche'):
+            meta_parts.append(f"<b>Verantwortliche:</b> {result['verantwortliche']}")
+
+        story.append(Paragraph(" | ".join(meta_parts), styles['Normal']))
+        story.append(Spacer(1, 0.3*cm))
+
+        # Details-Sektion (wie im Frontend)
+
+        # Lernziel-Abgleich
+        if result.get('lernziele') and len(result['lernziele']) > 0:
+            story.append(Paragraph("Lernziel-Abgleich", detail_heading_style))
+            story.append(Spacer(1, 0.1*cm))
+            for lz in result['lernziele']:
+                status = lz.get('status', 'N/A')
+                ziel = lz.get('ziel', 'N/A')
+                note = lz.get('note', '')
+                lz_text = f"<b>{status}</b> <b>{ziel}:</b> {note}"
+                story.append(Paragraph(lz_text, styles['Normal']))
+            story.append(Spacer(1, 0.2*cm))
+
+        # Credits (mit Vergleich)
+        if result.get('credits'):
+            extern = result['credits'].get('extern', 'n/a')
+            intern = result['credits'].get('intern', 'n/a')
+            bewertung = result['credits'].get('bewertung', '')
+            story.append(Paragraph("Credits", detail_heading_style))
+            story.append(Paragraph(f"Extern: {extern} | Intern: {intern} — {bewertung}", styles['Normal']))
+            story.append(Spacer(1, 0.2*cm))
+
+        # Niveau
+        if result.get('niveau'):
+            story.append(Paragraph("Niveau", detail_heading_style))
+            story.append(Paragraph(result['niveau'], styles['Normal']))
+            story.append(Spacer(1, 0.2*cm))
+
+        # Prüfung
+        if result.get('pruefung'):
+            story.append(Paragraph("Prüfung", detail_heading_style))
+            story.append(Paragraph(result['pruefung'], styles['Normal']))
+            story.append(Spacer(1, 0.2*cm))
+
+        # Workload (Vergleich)
+        if result.get('workload'):
+            story.append(Paragraph("Workload", detail_heading_style))
+            story.append(Paragraph(result['workload'], styles['Normal']))
+            story.append(Spacer(1, 0.2*cm))
+
+        # Defizite
+        if result.get('defizite') and len(result['defizite']) > 0:
+            story.append(Paragraph("Defizite", detail_heading_style))
+            for defizit in result['defizite']:
+                story.append(Paragraph(f"• {defizit}", styles['Normal']))
+            story.append(Spacer(1, 0.2*cm))
+
+        # Fazit
+        if result.get('fazit'):
+            story.append(Paragraph("Fazit", detail_heading_style))
+            story.append(Paragraph(result['fazit'], styles['Normal']))
+
+    # Build PDF
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.read()
 
 
 if __name__ == "__main__":
