@@ -1,12 +1,16 @@
 """Core matching and comparison logic."""
 import os
 import json
+import time
+import logging
 from google import genai
 from google.genai import types
 from .chromadb import get_vectorstore
 
+logger = logging.getLogger(__name__)
+
 # LLM Configuration
-DEFAULT_MODEL = "gemini-3-pro-preview"
+DEFAULT_MODEL = "gemini-flash-latest"
 
 # Schema for structured comparison output using genai types
 COMPARISON_SCHEMA = types.Schema(
@@ -17,10 +21,54 @@ COMPARISON_SCHEMA = types.Schema(
             "unit_id": types.Schema(type=types.Type.STRING),
             "lernziele_match": types.Schema(type=types.Type.INTEGER, description="0-100 percent"),
             "empfehlung": types.Schema(type=types.Type.STRING, enum=["vollständig", "teilweise", "keine"]),
-            "begründung": types.Schema(type=types.Type.STRING, description="Markdown formatted analysis")
+            "lernziele": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "ziel": types.Schema(type=types.Type.STRING),
+                        "status": types.Schema(type=types.Type.STRING, description="✓|~|✗"),
+                        "note": types.Schema(type=types.Type.STRING),
+                    },
+                    required=["ziel", "status", "note"]
+                )
+            ),
+            "credits": types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "extern": types.Schema(type=types.Type.NUMBER, nullable=True),
+                    "intern": types.Schema(type=types.Type.NUMBER, nullable=True),
+                    "bewertung": types.Schema(type=types.Type.STRING),
+                },
+                required=["bewertung"]
+            ),
+            "niveau": types.Schema(type=types.Type.STRING),
+            "pruefung": types.Schema(type=types.Type.STRING),
+            "workload": types.Schema(type=types.Type.STRING),
+            "defizite": types.Schema(
+                type=types.Type.ARRAY,
+                items=types.Schema(type=types.Type.STRING)
+            ),
+            "fazit": types.Schema(type=types.Type.STRING),
         },
-        required=["unit_id", "lernziele_match", "empfehlung", "begründung"]
+        required=["unit_id", "lernziele_match", "empfehlung", "lernziele", "credits", "niveau", "pruefung", "workload", "defizite", "fazit"]
     )
+)
+
+SINGLE_COMPARISON_SCHEMA = types.Schema(
+    type=types.Type.OBJECT,
+    properties={
+        "lernziele_match": types.Schema(type=types.Type.INTEGER, description="0-100 percent"),
+        "empfehlung": types.Schema(type=types.Type.STRING, enum=["vollständig", "teilweise", "keine"]),
+        "lernziele": COMPARISON_SCHEMA.items.properties["lernziele"],
+        "credits": COMPARISON_SCHEMA.items.properties["credits"],
+        "niveau": types.Schema(type=types.Type.STRING),
+        "pruefung": types.Schema(type=types.Type.STRING),
+        "workload": types.Schema(type=types.Type.STRING),
+        "defizite": COMPARISON_SCHEMA.items.properties["defizite"],
+        "fazit": types.Schema(type=types.Type.STRING),
+    },
+    required=["lernziele_match", "empfehlung", "lernziele", "credits", "niveau", "pruefung", "workload", "defizite", "fazit"]
 )
 
 
@@ -32,7 +80,7 @@ class MatchingAssistant:
         self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
         self.model = os.getenv("LLM_MODEL", DEFAULT_MODEL)
 
-    def find_matching_units(self, external_module_text: str, limit: int = 5) -> list[dict]:
+    def find_matching_units(self, external_module_text: str, limit: int = 5) -> dict:
         """Find top matching internal units for an external module.
 
         Args:
@@ -40,13 +88,15 @@ class MatchingAssistant:
             limit: Number of results to return
 
         Returns:
-            List of matching units with metadata and similarity scores
+            Dict with matches list and timing metadata
         """
+        start = time.time()
         results = self.collection.query(
             query_texts=[external_module_text],
             n_results=limit,
             include=["documents", "metadatas", "distances"]
         )
+        query_time = time.time() - start
 
         matches = []
         for i, (doc, meta, dist) in enumerate(zip(
@@ -71,7 +121,13 @@ class MatchingAssistant:
                 "content_preview": doc[:500] + "..." if len(doc) > 500 else doc
             })
 
-        return matches
+        logger.info(f"Vector search completed in {query_time:.3f}s (embedding + query)")
+        return {
+            "matches": matches,
+            "timing": {
+                "vector_search_ms": round(query_time * 1000, 1)
+            }
+        }
 
     def _call_llm(self, prompt: str) -> str:
         """Call Gemini LLM and return text response."""
@@ -95,7 +151,7 @@ class MatchingAssistant:
             raw_text: Raw text from external module description
 
         Returns:
-            Structured module data
+            Dict with module data and timing metadata
         """
         prompt = """Du extrahierst Metadaten aus akademischen Modulbeschreibungen.
 Antworte NUR mit validem JSON nach diesem Schema:
@@ -115,25 +171,39 @@ Dokument:
 """ + raw_text[:8000]
 
         try:
+            start = time.time()
             content = self._call_llm(prompt)
+            llm_time = time.time() - start
+
             # Extract JSON from response (handle markdown code blocks)
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0]
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0]
 
-            return json.loads(content.strip())
+            module_data = json.loads(content.strip())
+            logger.info(f"Parse LLM call completed in {llm_time:.3f}s")
+
+            return {
+                "module": module_data,
+                "timing": {
+                    "parse_llm_ms": round(llm_time * 1000, 1)
+                }
+            }
         except (json.JSONDecodeError, IndexError):
             return {
-                "title": "Unbekannt",
-                "credits": None,
-                "workload": None,
-                "learning_goals": [],
-                "assessment": None,
-                "level": None,
-                "institution": None,
-                "raw_text": raw_text[:2000],
-                "parse_error": True
+                "module": {
+                    "title": "Unbekannt",
+                    "credits": None,
+                    "workload": None,
+                    "learning_goals": [],
+                    "assessment": None,
+                    "level": None,
+                    "institution": None,
+                    "raw_text": raw_text[:2000],
+                    "parse_error": True
+                },
+                "timing": {}
             }
 
     def compare_modules(self, external_module: dict, internal_unit_id: str) -> dict:
@@ -170,21 +240,26 @@ Dokument:
 **Inhalt:**
 {internal_doc}"""
 
-        prompt = """Prüfe ob externes Modul auf interne Unit anerkennbar ist.
+        prompt = """Prüfe, ob externes Modul auf interne Unit anerkennbar ist. Liefere JSON nach Schema:
+{
+  "lernziele_match": 0-100,
+  "empfehlung": "vollständig"|"teilweise"|"keine",
+  "lernziele": [
+    {"ziel": "Unit-Ziel", "status": "✓|~|✗", "note": "1 Satz warum"}
+  ],
+  "credits": {"extern": Zahl|null, "intern": Zahl|null, "bewertung": "OK/Problem + 1 Satz"},
+  "niveau": "Bachelor/Master Bewertung, 1 Satz",
+  "pruefung": "Prüfungsform-Vergleich, 1 Satz",
+  "workload": "Workload-Einordnung, 1 Satz",
+  "defizite": ["konkrete Lücke 1", "…"],
+  "fazit": "2-3 Sätze, klare Begründung + Empfehlung"
+}
 
 Kriterien:
 - Lernziele: ≥80% → vollständig, ≥50% → teilweise, <50% → keine
-- Credits: Extern ≥ Intern OK, ~10% Diff OK, Intern >> Extern → max teilweise
-- Niveau: Bachelor/Master sollten passen
-- Arbeitsaufwand/Prüfungsform: nur wenn vergleichbar
-
-Antworte KURZ und SACHLICH (max 150 Wörter):
-1. Lernziele-Übereinstimmung (geschätzt %)
-2. Credits-Vergleich (OK/Problem)
-3. Wesentliche Defizite (Stichpunkte, max 3)
-4. **Empfehlung: vollständig/teilweise/keine**
-
-Keine Anrede, keine Tabellen, keine Floskeln.
+- Credits: Extern ≥ Intern OK, bis ~10% Diff tolerierbar
+- Niveau/Prüfung/Workload nur erwähnen wenn relevant
+- Max 3 Defizite, sachlich, keine Floskeln.
 
 ## Externes Modul
 """ + external_text + """
@@ -193,20 +268,23 @@ Keine Anrede, keine Tabellen, keine Floskeln.
 """ + internal_text
 
         try:
-            content = self._call_llm(prompt)
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=SINGLE_COMPARISON_SCHEMA,
+                    thinking_config=types.ThinkingConfig(thinking_budget=-1),
+                ),
+            )
 
-            # Extract recommendation from Markdown response
-            recommendation = "offen"
-            if "**Vollständige Anerkennung**" in content or "Vollständige Anerkennung empfohlen" in content:
-                recommendation = "vollständig"
-            elif "**Teilweise Anerkennung**" in content or "Teilweise Anerkennung empfohlen" in content:
-                recommendation = "teilweise"
-            elif "**Keine Anerkennung**" in content or "Keine Anerkennung empfohlen" in content:
-                recommendation = "keine"
-
+            content = response.candidates[0].content.parts[0].text
+            parsed = json.loads(content)
+            recommendation = parsed.get("empfehlung", "offen")
             return {
                 "recommendation": recommendation,
-                "reasoning": content,  # Full Markdown response
+                "reasoning": parsed.get("begründung", ""),
+                "learning_goals_match": parsed.get("lernziele_match"),
                 "internal_unit_id": internal_unit_id,
                 "internal_unit_title": internal_meta.get("unit_title"),
                 "internal_module_title": internal_meta.get("module_title"),
@@ -262,29 +340,27 @@ Credits: {u['meta'].get('credits')}
 
         prompt = f"""Prüfe Anerkennbarkeit: Externes Modul → {len(units_data)} interne Units.
 
-WICHTIG: Genau {len(units_data)} Ergebnisse zurückgeben - für JEDE Unit.
+WICHTIG: Gib GENAU {len(units_data)} Ergebnisse zurück (eins pro Unit) im JSON-Schema:
+[
+  {{
+    "unit_id": "...",
+    "lernziele_match": 0-100,
+    "empfehlung": "vollständig"|"teilweise"|"keine",
+    "lernziele": [{{"ziel": "Unit-Ziel", "status": "✓|~|✗", "note": "1 Satz"}}],
+    "credits": {{"extern": Zahl|null, "intern": Zahl|null, "bewertung": "OK/Problem + 1 Satz"}},
+    "niveau": "1 Satz zur Passung",
+    "pruefung": "1 Satz zum Prüfungsvergleich",
+    "workload": "1 Satz zur Arbeitsbelastung",
+    "defizite": ["Lücke 1", "..."],
+    "fazit": "2-3 Sätze, klare Begründung + Empfehlung"
+  }}
+]
 
 Kriterien:
 - Lernziele: ≥80% → vollständig, ≥50% → teilweise, <50% → keine
-- Credits: extern ≥ intern = OK
-
-Pro Unit ausgeben:
-- lernziele_match: 0-100%
-- empfehlung: vollständig/teilweise/keine
-- begründung: Ausführliche Markdown-Analyse (8-15 Zeilen):
-
-  **Lernziel-Abgleich:**
-  Für jedes Lernziel der internen Unit: ✓ abgedeckt / ✗ nicht abgedeckt
-  - [Unit-Lernziel 1]: ✓/✗ Erklärung
-  - [Unit-Lernziel 2]: ✓/✗ Erklärung
-
-  **Credits:** X extern vs. Y intern → OK/Problem
-
-  **Defizite:** Konkret was fehlt (falls vorhanden)
-
-  **Fazit:** 2-3 Sätze mit klarer Empfehlung und Begründung.
-
-Sachlich, keine Floskeln, keine Tabellen.
+- Credits: extern ≥ intern = OK (bis ~10% Differenz tolerierbar)
+- Niveau/Prüfung/Workload nur erwähnen, wenn relevant für Entscheidung
+- Max 3 Defizite, sachlich, keine Floskeln.
 
 ## Externes Modul
 {external_text}
@@ -294,14 +370,17 @@ Sachlich, keine Floskeln, keine Tabellen.
 """
 
         try:
+            start = time.time()
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=COMPARISON_SCHEMA,
+                    thinking_config=types.ThinkingConfig(thinking_budget=-1),
                 ),
             )
+            llm_time = time.time() - start
 
             result_text = response.candidates[0].content.parts[0].text
             results = json.loads(result_text)
@@ -318,10 +397,16 @@ Sachlich, keine Floskeln, keine Tabellen.
                 r['unit_workload'] = meta.get('workload')
                 r['unit_content'] = unit_data.get('doc', '')[:2000]  # First 2000 chars for display
 
-            return results
+            logger.info(f"Compare LLM call completed in {llm_time:.3f}s ({len(results)} units)")
+            return {
+                "results": results,
+                "timing": {
+                    "compare_llm_ms": round(llm_time * 1000, 1)
+                }
+            }
 
         except Exception as e:
-            return [{"error": str(e)}]
+            return {"results": [{"error": str(e)}], "timing": {}}
 
     def _format_module_for_comparison(self, module: dict, is_external: bool = True) -> str:
         """Format module data for LLM comparison."""

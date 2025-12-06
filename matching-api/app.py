@@ -90,16 +90,14 @@ async def health():
 async def match_units(request: MatchRequest):
     """Find matching internal units for an external module description."""
     assistant = get_assistant()
-    matches = assistant.find_matching_units(request.text, limit=request.limit)
-    return {"matches": matches}
+    return assistant.find_matching_units(request.text, limit=request.limit)
 
 
 @app.post("/parse")
 async def parse_module(request: ParseRequest):
     """Parse external module text into structured format using LLM."""
     assistant = get_assistant()
-    module = assistant.parse_external_module(request.text)
-    return {"module": module}
+    return assistant.parse_external_module(request.text)
 
 
 @app.post("/compare")
@@ -119,13 +117,13 @@ async def compare_modules(request: CompareRequest):
 async def compare_multiple(request: CompareMultipleRequest):
     """Compare external module with multiple internal units in one LLM call."""
     assistant = get_assistant()
-    results = assistant.compare_multiple(
+    result = assistant.compare_multiple(
         request.external_module,
         request.unit_ids
     )
-    if results and "error" in results[0]:
-        raise HTTPException(status_code=500, detail=results[0]["error"])
-    return {"results": results}
+    if result.get("results") and "error" in result["results"][0]:
+        raise HTTPException(status_code=500, detail=result["results"][0]["error"])
+    return result
 
 
 @app.post("/match-and-compare")
@@ -134,20 +132,24 @@ async def match_and_compare(request: MatchAndCompareRequest):
     assistant = get_assistant()
 
     # Parse external module
-    parsed = assistant.parse_external_module(request.text)
+    parse_result = assistant.parse_external_module(request.text)
 
     # Find matches
-    matches = assistant.find_matching_units(request.text, limit=5)
+    match_result = assistant.find_matching_units(request.text, limit=5)
 
     result = {
-        "parsed_module": parsed,
-        "matches": matches
+        "parsed_module": parse_result.get("module"),
+        "matches": match_result.get("matches"),
+        "timing": {
+            **parse_result.get("timing", {}),
+            **match_result.get("timing", {})
+        }
     }
 
     # Auto-compare with top match if requested
-    if request.auto_compare and matches:
-        top_match_id = matches[0]["unit_id"]
-        comparison = assistant.compare_modules(parsed, top_match_id)
+    if request.auto_compare and match_result.get("matches"):
+        top_match_id = match_result["matches"][0]["unit_id"]
+        comparison = assistant.compare_modules(parse_result.get("module"), top_match_id)
         result["comparison"] = comparison
 
     return result
