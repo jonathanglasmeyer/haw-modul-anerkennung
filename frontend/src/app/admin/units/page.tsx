@@ -28,7 +28,7 @@ export default function AdminUnitsPage() {
   const [selectedUnit, setSelectedUnit] = useState<Unit | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [formData, setFormData] = useState<Partial<Unit>>({});
+  const [formData, setFormData] = useState<Partial<Unit> & { verantwortliche_ids?: number[] }>({});
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [filterStudiengang, setFilterStudiengang] = useState<StudiengangFilter>('all');
