@@ -22,3 +22,5 @@ matching-api/data/vectorstore/*/
 frontend/tsconfig.tsbuildinfo
 frontend/.next/
 frontend/out/
+.vercel
+.env*.local

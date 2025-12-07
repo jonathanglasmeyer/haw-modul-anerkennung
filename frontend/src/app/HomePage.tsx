@@ -388,9 +388,11 @@ ${units}
 
 Details siehe beigefügtes PDF.
 
+Wichtig: Bitte vergessen Sie nicht, die Leistungsnachweise für jede erreichte Studienleistung beizufügen.
+
 Mit freundlichen Grüßen`;
 
-    return { subject, body, to: 'pruefungsbuero@haw-hamburg.de' };
+    return { subject, body, to: 'pruefungsausschuss-puma@haw-hamburg.de' };
   }, [parsedModule, compareResults]);
 
   const copyEmailToClipboard = async () => {
