@@ -39,8 +39,8 @@ npm run dev  # Dev-Server (Port 3000)
 
 ## Deployment
 
-- **Backend**: Hetzner VPS (https://matching-api.quietloop.dev) - Auto-Deploy bei push auf `main`
-- **Frontend**: Vercel (https://haw-modulanerkennung.vercel.app)
+- **Backend**: https://matching-api.quietloop.dev (Hetzner VPS - Auto-Deploy bei push auf `main`)
+- **Frontend**: Vercel (Auto-Deploy bei push auf `main`)
 
 ## Technologien
 

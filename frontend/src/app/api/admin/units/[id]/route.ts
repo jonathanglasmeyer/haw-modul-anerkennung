@@ -4,7 +4,7 @@ const MATCHING_API_URL = process.env.MATCHING_API_URL || 'https://matching-api.q
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const token = request.headers.get('authorization')
@@ -14,7 +14,7 @@ export async function PUT(
 
     const body = await request.json()
 
-    const response = await fetch(`${MATCHING_API_URL}/api/admin/units/${params.id}`, {
+    const { id } = await params; const response = await fetch(`${MATCHING_API_URL}/api/admin/units/${id}`, {
       method: 'PUT',
       headers: {
         'Authorization': token,
@@ -42,7 +42,7 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const token = request.headers.get('authorization')
@@ -50,7 +50,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    const response = await fetch(`${MATCHING_API_URL}/api/admin/units/${params.id}`, {
+    const { id } = await params; const response = await fetch(`${MATCHING_API_URL}/api/admin/units/${id}`, {
       method: 'DELETE',
       headers: {
         'Authorization': token,

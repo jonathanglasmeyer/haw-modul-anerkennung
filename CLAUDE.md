@@ -56,12 +56,12 @@ FastAPI + ChromaDB + Gemini. Auth via `X-API-Key` header.
 
 ## Frontend (`../frontend/`)
 
-Next.js 15 + shadcn/ui deployed auf Cloudflare Workers via OpenNext.js adapter. URL: `https://anerkennung.quietloop.dev`
+Next.js 15 + shadcn/ui deployed auf Vercel.
 
 **Tech Stack:**
 - Next.js 15.1 (App Router) + React 18
 - shadcn/ui (Radix UI primitives) + Tailwind CSS v4
-- Cloudflare Workers (OpenNext.js)
+- Vercel Hosting
 
 **3-Step Workflow:**
 1. Input → Module eingeben (Textarea/PDF)
