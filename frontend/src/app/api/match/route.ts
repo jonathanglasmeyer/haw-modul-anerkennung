@@ -3,7 +3,7 @@ import { matchingService, MatchingServiceError } from '@/lib/matching-service'
 
 export async function POST(request: NextRequest) {
   try {
-    const { text, limit } = await request.json()
+    const { text, limit, studiengang } = await request.json()
 
     if (!text) {
       return NextResponse.json(
@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const data = await matchingService.match(text, limit)
+    const data = await matchingService.match(text, limit, studiengang)
     return NextResponse.json(data)
   } catch (error) {
     console.error('Error in /api/match:', error)

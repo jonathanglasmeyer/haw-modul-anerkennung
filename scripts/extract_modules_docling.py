@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Extract structured module/unit data from Modulhandbuch PDF using Docling."""
+"""Extract structured module/unit data from Modulhandbuch PDF using Docling.
+
+Usage:
+    python scripts/extract_modules_docling.py <pdf_path> <output_json> [--prefix PREFIX]
+"""
+import sys
 import re
 import json
 from pathlib import Path
@@ -45,6 +50,12 @@ def extract_modules_and_units(markdown: str, prefix: str = "BAPuMa") -> dict:
 
         # Extract metadata from table rows
         semester = extract_table_value(section, r'Semester[^|]*\|[^|]*\|[^|]*\|\s*(\d+)\. Semester')
+        if not semester:
+            m_sem = re.search(r'(\d+)\.\s*Semester', section)
+            semester = m_sem.group(1) if m_sem else ''
+        if not semester:
+            m_sem = re.search(r'Fachsemester[^|]*\|\s*(\d+)', section)
+            semester = m_sem.group(1) if m_sem else ''
         sws = extract_table_value(section, r'(\d+)\s*SWS')
         workload = extract_table_value(section, r'(Präsenzstudium\s*\d+\s*h,?\s*Selbststudium\s*\d+\s*h)')
         dauer = extract_table_value(section, r'\|\s*Dauer\s*\|[^|]*\|\s*(\d+\s*Semester)')
@@ -114,18 +125,13 @@ def extract_modules_and_units(markdown: str, prefix: str = "BAPuMa") -> dict:
     # Extract module-level info from module headers
     # Pattern: "| Modul 12 (M12) | ... | Interne und externe Ressourcensteuerung |"
     # Only match actual module headers (followed by Modulkoordination row)
-    module_pattern = r'\| Modul (\d+[A-Z]?) \(M\d+[A-Z]?\)\s*\|[^|]*\|[^|]*\|\s*([^|]+?)\s*\|'
+    # Allow headers with or without the explicit "(M12)" part
+    module_pattern = r'\| Modul (\d+[A-Z]?)(?: \(M\d+[A-Z]?\))?\s*\|[^|]*\|[^|]*\|\s*([^|]+?)\s*\|'
 
-    seen_modules = set()  # Track which modules we've already processed
     for match in re.finditer(module_pattern, markdown):
         module_num = match.group(1)
         module_title = match.group(2).strip()
         module_id = f"{prefix}_M{module_num}"
-
-        # Skip if we've already processed this module (take first occurrence only)
-        if module_id in seen_modules:
-            continue
-        seen_modules.add(module_id)
 
         # Get section after module header until next module or unit header
         start_pos = match.start()
@@ -142,6 +148,15 @@ def extract_modules_and_units(markdown: str, prefix: str = "BAPuMa") -> dict:
         sws = sws_match.group(1) if sws_match else ''
 
         semester = extract_table_value(section, r'Semester[^|]*\|[^|]*\|[^|]*\|\s*(\d+)\. Semester')
+        if not semester:
+            m_sem = re.search(r'(\d+)\.\s*Semester', section)
+            semester = m_sem.group(1) if m_sem else ''
+        if not semester:
+            m_sem = re.search(r'Fachsemester[^|]*\|\s*(\d+)', section)
+            semester = m_sem.group(1) if m_sem else ''
+        if not semester:
+            m_sem = re.search(r'(\d+)\.\s*Semester', section)
+            semester = m_sem.group(1) if m_sem else ''
         dauer = extract_table_value(section, r'\|\s*Dauer\s*\|[^|]*\|\s*(\d+\s*Semester)')
         angebotsturnus = extract_table_value(section, r'\|\s*(jedes\s+(?:Sommer|Winter)semester)\s*\|')
         workload = extract_table_value(section, r'Arbeitsaufwand[^|]*\|[^|]*\|[^|]*\|\s*(Präsenzstudium[^|]+)')
@@ -181,12 +196,39 @@ def extract_modules_and_units(markdown: str, prefix: str = "BAPuMa") -> dict:
         }
 
         if module_id in modules:
-            # Update existing with new data, keep units
-            existing_units = modules[module_id].get('units', [])
-            modules[module_id] = module_data
-            modules[module_id]['units'] = existing_units
-        else:
-            modules[module_id] = module_data
+            existing = modules[module_id]
+            existing_units = existing.get('units', [])
+            module_data['units'] = existing_units
+            # Merge fields, avoid overwriting with empties
+            for key, value in module_data.items():
+                if key == 'title':
+                    current = existing.get(key, '')
+                    module_data[key] = current if len(current) >= len(value) else value
+                else:
+                    if not value and existing.get(key):
+                        module_data[key] = existing[key]
+        modules[module_id] = module_data
+
+    # Backfill missing module metadata from units (semester/credits/sws)
+    from collections import Counter
+    for module_id, module in modules.items():
+        unit_ids = module.get('units', [])
+        unit_objs = [units[uid] for uid in unit_ids if uid in units]
+        if not module.get('semester'):
+            sems = [u['semester'] for u in unit_objs if u.get('semester')]
+            if sems:
+                module['semester'] = Counter(sems).most_common(1)[0][0]
+        if not module.get('credits'):
+            for u in unit_objs:
+                # credits are not stored on units today; keep hook for future
+                if u.get('credits'):
+                    module['credits'] = u['credits']
+                    break
+        if not module.get('sws'):
+            for u in unit_objs:
+                if u.get('sws'):
+                    module['sws'] = u['sws']
+                    break
 
     return {'modules': modules, 'units': units}
 
@@ -265,8 +307,27 @@ def extract_content_section(text: str) -> str:
 
 
 def main():
-    pdf_path = '/Users/jonathan.glasmeyer/Projects/stephan-uni/data/kern/modulhandbuecher/BA_PuMa_MHB_18-07-2024.pdf'
-    md_cache = Path('/tmp/ba_puma_docling.md')
+    if len(sys.argv) < 3:
+        print("Usage: extract_modules_docling.py <pdf_path> <output_json> [--prefix PREFIX]")
+        sys.exit(1)
+
+    pdf_path = sys.argv[1]
+    output_json = sys.argv[2]
+
+    # Parse optional prefix
+    prefix = "BAPuMa"
+    if "--prefix" in sys.argv:
+        idx = sys.argv.index("--prefix")
+        if idx + 1 < len(sys.argv):
+            prefix = sys.argv[idx + 1]
+
+    print(f"PDF: {pdf_path}")
+    print(f"Output: {output_json}")
+    print(f"Prefix: {prefix}\n")
+
+    # Check if markdown cache exists
+    pdf_name = Path(pdf_path).stem
+    md_cache = Path(f"/tmp/{pdf_name}_docling.md")
 
     # Use cached markdown if available, otherwise convert
     if md_cache.exists():
@@ -281,32 +342,24 @@ def main():
 
     # Extract structured data
     print("\nExtracting modules and units...")
-    data = extract_modules_and_units(markdown)
+    data = extract_modules_and_units(markdown, prefix)
 
     print(f"Found {len(data['modules'])} modules and {len(data['units'])} units")
 
-    # Print sample
-    print("\n=== Sample Module ===")
-    if data['modules']:
-        sample_mod = list(data['modules'].values())[0]
-        print(json.dumps(sample_mod, indent=2, ensure_ascii=False)[:800])
-
-    print("\n=== Sample Unit (M12_U1) ===")
-    if 'BAPuMa_M12_U1' in data['units']:
-        print(json.dumps(data['units']['BAPuMa_M12_U1'], indent=2, ensure_ascii=False)[:1500])
-
     # Save to JSON
-    output_path = Path('/Users/jonathan.glasmeyer/Projects/stephan-uni/data/kern/modulhandbuecher/BA_PuMa_extracted_docling.json')
+    output_path = Path(output_json)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    print(f"\nSaved to {output_path}")
+    print(f"\n✓ Saved to {output_path}")
 
     # Stats
     units_with_outcomes = sum(1 for u in data['units'].values() if u['learning_outcomes_text'])
     units_with_content = sum(1 for u in data['units'].values() if u['content'])
-    print(f"Units with learning outcomes: {units_with_outcomes}/{len(data['units'])}")
-    print(f"Units with content: {units_with_content}/{len(data['units'])}")
+    print(f"\nStats:")
+    print(f"  Units with learning outcomes: {units_with_outcomes}/{len(data['units'])}")
+    print(f"  Units with content: {units_with_content}/{len(data['units'])}")
 
 
 if __name__ == '__main__':

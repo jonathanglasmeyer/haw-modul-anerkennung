@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync units from Airtable into ChromaDB."""
+"""Sync units from NeonDB into ChromaDB."""
 import sys
 import os
 
@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv()
 
-from matching.chromadb import sync_from_airtable
+from matching.chromadb import sync_from_database
 
 
 def main():
@@ -20,7 +20,7 @@ def main():
     if force:
         print("Force refresh enabled")
 
-    count = sync_from_airtable(force_refresh=force)
+    count = sync_from_database(force_refresh=force)
     print(f"Done! {count} units in ChromaDB")
 
 

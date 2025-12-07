@@ -22,6 +22,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { ChevronDown, Check, Copy } from "lucide-react";
+import { type Studiengang, STUDIENGAENGE } from "@/lib/studiengang";
 
 interface Match {
   unit_id: string;
@@ -183,6 +184,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
 
   const [moduleText, setModuleText] = useState("");
+  const [studiengang, setStudiengang] = useState<Studiengang | null>(null);
   const [parsedModule, setParsedModule] = useState<ParsedModule | null>(null);
   const [matches, setMatches] = useState<Match[]>([]);
   const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
@@ -191,10 +193,28 @@ export default function Home() {
   const [emailCopied, setEmailCopied] = useState(false);
   const hasRestored = useRef(false);
 
+  // Clear matches when studiengang changes
+  const handleStudiengangChange = (newStudiengang: Studiengang) => {
+    setStudiengang(newStudiengang);
+    // Clear matches and results from previous studiengang
+    setMatches([]);
+    setSelectedUnitIds([]);
+    setCompareResults([]);
+    // Go back to step 1 if user was on other steps
+    if (step !== "input") {
+      router.push("/", { scroll: false });
+    }
+  };
+
   const handleSearch = async () => {
-    if (!moduleText.trim()) return;
+    if (!moduleText.trim() || !studiengang) return;
     setLoading(true);
     setError(null);
+    // Clear old results
+    setMatches([]);
+    setSelectedUnitIds([]);
+    setCompareResults([]);
+
     try {
       const parseRes = await fetch("/api/parse", {
         method: "POST",
@@ -209,14 +229,13 @@ export default function Home() {
       const matchRes = await fetch("/api/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: moduleText, limit: 10 }),
+        body: JSON.stringify({ text: moduleText, limit: 10, studiengang }),
       });
       const matchData = await matchRes.json();
       if (matchData.error) throw new Error(matchData.error);
       console.log("[Timing] Match:", matchData.timing);
 
       setMatches(matchData.matches || []);
-      setSelectedUnitIds([]);
       router.push("/?step=matches", { scroll: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fehler bei der Suche");
@@ -226,7 +245,7 @@ export default function Home() {
   };
 
   const handleCompare = async () => {
-    if (!parsedModule || selectedUnitIds.length === 0) return;
+    if (!parsedModule || selectedUnitIds.length === 0 || !studiengang) return;
     setLoading(true);
     setError(null);
     setCompareProgress(0);
@@ -250,6 +269,7 @@ export default function Home() {
         body: JSON.stringify({
           external_module: parsedModule,
           unit_ids: selectedUnitIds,
+          studiengang,
         }),
       });
       const data = await res.json();
@@ -285,6 +305,7 @@ export default function Home() {
 
   const reset = () => {
     setModuleText("");
+    setStudiengang(null);
     setParsedModule(null);
     setMatches([]);
     setSelectedUnitIds([]);
@@ -297,7 +318,7 @@ export default function Home() {
     if (!parsedModule) return;
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_MATCHING_API_URL}/export-pdf`, {
+      const response = await fetch('/api/export-pdf', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -420,6 +441,7 @@ ${emailContent.body}`;
       try {
         const state = JSON.parse(saved);
         setModuleText(state.moduleText || "");
+        setStudiengang(state.studiengang || null);
         setParsedModule(state.parsedModule || null);
         setMatches(state.matches || []);
         setSelectedUnitIds(state.selectedUnitIds || []);
@@ -438,22 +460,28 @@ ${emailContent.body}`;
       SESSION_KEY,
       JSON.stringify({
         moduleText,
+        studiengang,
         parsedModule,
         matches,
         selectedUnitIds,
         compareResults,
       }),
     );
-  }, [moduleText, parsedModule, matches, selectedUnitIds, compareResults]);
+  }, [moduleText, studiengang, parsedModule, matches, selectedUnitIds, compareResults]);
 
   return (
     <div className="min-h-screen bg-background pt-32">
       {/* Header - Fixed */}
       <header className="fixed top-0 left-0 right-0 z-50 bg-primary text-primary-foreground border-b border-primary-foreground/10">
         <div className="max-w-7xl mx-auto px-6 py-5">
-          <div className="flex items-center gap-3">
-            <img src="/haw-logo.svg" alt="HAW Hamburg" className="h-7" />
+          <div className="flex items-center">
+            <button onClick={() => router.push("/", { scroll: false })} className="hover:opacity-80 transition-opacity mr-[32px]">
+              <img src="/haw-logo.svg" alt="HAW Hamburg" className="h-7" />
+            </button>
             <div className="text-lg font-bold">Modulanerkennung</div>
+            <div className="px-2.5 py-1 bg-primary-foreground/15 text-primary-foreground text-xs font-medium rounded-sm border border-primary-foreground/20 ml-3">
+              BETA
+            </div>
           </div>
         </div>
       </header>
@@ -562,16 +590,42 @@ ${emailContent.body}`;
         {/* Step 1: Input */}
         {step === "input" && (
           <section className="max-w-4xl">
-            <h2 className="text-xl font-bold mb-2">Externes Modul eingeben</h2>
-            <p className="text-muted-foreground mb-6">
-              Geben Sie die Modulbeschreibung ein, um passende interne Units zu
-              finden.
+            <h2 className="text-xl font-bold mb-4">So funktioniert die Modulanerkennung</h2>
+            <ol className="space-y-2 mb-3 list-decimal list-inside">
+              <li>Geben Sie die Modulbeschreibung Ihrer externen Studienleistung ein.</li>
+              <li>Das System schlägt mithilfe intelligenter Textanalyse passende HAW-Units vor. Wählen Sie die relevanten aus.</li>
+              <li>Das System erstellt eine detaillierte KI-Analyse, die Sie als PDF exportieren oder per E-Mail versenden können.</li>
+            </ol>
+
+            <p className="text-sm mb-6">
+              Es besteht kein Rechtsanspruch auf Anerkennung in der von der KI geprüften Form. Bitte geben Sie keine persönlichen Daten ein.
             </p>
-            <div className="space-y-4">
+
+            <div className="space-y-5">
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Modulbeschreibung
-                </label>
+                <h3 className="text-lg font-semibold mb-3">
+                  Studiengang
+                </h3>
+                <div className="flex gap-2">
+                  {(Object.keys(STUDIENGAENGE) as Studiengang[]).map(key => (
+                    <button
+                      key={key}
+                      onClick={() => handleStudiengangChange(key)}
+                      className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
+                        studiengang === key
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
+                      }`}
+                    >
+                      {STUDIENGAENGE[key]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold mb-3">
+                  Externes Modul
+                </h3>
                 <Textarea
                   value={moduleText}
                   onChange={(e) => setModuleText(e.target.value)}
@@ -582,7 +636,7 @@ ${emailContent.body}`;
               <div className="flex justify-end">
                 <Button
                   onClick={handleSearch}
-                  disabled={loading || !moduleText.trim()}
+                  disabled={loading || !moduleText.trim() || !studiengang}
                 >
                   {loading ? "Suche läuft..." : "Passende Units finden"}
                 </Button>
@@ -612,10 +666,10 @@ ${emailContent.body}`;
                     <div className="flex items-start justify-between">
                       <div>
                         <CardTitle className="text-base">
-                          Vorauswahl: {matches.length} ähnlichste Units
+                          Vorauswahl: {matches.length} ähnlichste Units{studiengang && ` aus ${STUDIENGAENGE[studiengang]}`}
                         </CardTitle>
                         <CardDescription className="mt-1">
-                          Basierend auf Textähnlichkeit. Wähle Units für die fachliche Prüfung aus.
+                          Basierend auf Textähnlichkeit. Wählen Sie Units für die KI-Analyse aus.
                         </CardDescription>
                       </div>
                       <Button
@@ -661,7 +715,14 @@ ${emailContent.body}`;
         {/* Step 3: Results - 3 Column Layout */}
         {step === "results" && (
           <section>
-            <h2 className="text-xl font-bold mb-2">Vergleichsergebnisse</h2>
+            <div className="flex items-center gap-3 mb-2">
+              <h2 className="text-xl font-bold">Vergleichsergebnisse</h2>
+              {studiengang && (
+                <Badge variant="outline" className="text-xs">
+                  {STUDIENGAENGE[studiengang]}
+                </Badge>
+              )}
+            </div>
             <p className="text-muted-foreground mb-6">
               Empfehlungen für die Anerkennung der ausgewählten Units.
             </p>
@@ -818,7 +879,7 @@ ${emailContent.body}`;
                     <strong>Nächste Schritte:</strong> 1. Email-Inhalt kopieren · 2. PDF herunterladen · 3. In deinem Email-Client einfügen und PDF anhängen
                   </div>
                   <div className="flex gap-3">
-                    <Button onClick={copyEmailToClipboard} disabled={emailCopied}>
+                    <Button onClick={copyEmailToClipboard} disabled={emailCopied} className="w-52">
                       {emailCopied ? (
                         <>
                           <Check className="mr-2 h-4 w-4" />

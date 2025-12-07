@@ -2,7 +2,9 @@
 import os
 import chromadb
 from google import genai
-from .airtable import fetch_units_from_airtable
+from datetime import datetime
+from typing import Optional
+from .database import fetch_units_from_db, get_units_checksum
 
 EMBEDDING_MODEL = "gemini-embedding-001"
 COLLECTION_NAME = "units"
@@ -55,6 +57,9 @@ class GeminiEmbeddingFunction:
 _client = None
 _collection = None
 
+# Cache last known checksum to avoid redundant syncs
+_last_checksum: Optional[datetime] = None
+
 
 def get_vectorstore(vectorstore_path: str = None):
     """Get or create ChromaDB collection."""
@@ -79,19 +84,17 @@ def get_vectorstore(vectorstore_path: str = None):
     return _collection
 
 
-def sync_from_airtable(force_refresh: bool = False) -> int:
-    """Sync units from Airtable into ChromaDB.
+def sync_from_database(force_refresh: bool = False) -> int:
+    """Sync units from NeonDB into ChromaDB.
 
     Args:
-        force_refresh: Force fetch from Airtable even if cache is fresh
+        force_refresh: Force full refresh of ChromaDB collection
 
     Returns:
         Number of units in collection
     """
-    cache_dir = os.getenv("VECTORSTORE_PATH", "./data/vectorstore")
-
-    # Fetch from Airtable (uses cache if unchanged)
-    data = fetch_units_from_airtable(cache_dir=cache_dir, force_refresh=force_refresh)
+    # Fetch from NeonDB
+    data = fetch_units_from_db()
     units = data.get("units", {})
     modules = data.get("modules", {})
 
@@ -189,3 +192,27 @@ def sync_from_airtable(force_refresh: bool = False) -> int:
     total = collection.count()
     print(f"Added {len(documents)} units. Total: {total}")
     return total
+
+
+def ensure_synced() -> bool:
+    """
+    Ensure ChromaDB is synced with latest NeonDB data.
+
+    Uses checksum (max updated_at timestamp) to detect changes.
+    Only syncs if data changed since last check.
+
+    Returns:
+        True if sync was performed, False if already up-to-date
+    """
+    global _last_checksum
+
+    current_checksum = get_units_checksum()
+
+    # First run or data changed
+    if _last_checksum is None or current_checksum != _last_checksum:
+        print(f"Units checksum changed: {_last_checksum} -> {current_checksum}")
+        sync_from_database()
+        _last_checksum = current_checksum
+        return True
+
+    return False

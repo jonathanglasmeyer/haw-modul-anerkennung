@@ -17,11 +17,13 @@ Wissenschaftlicher Mitarbeiter an Hochschule, bearbeitet ~75 Anerkennungsanträg
 2. Email-Automation → automatisch an zuständigen Prof weiterleiten
 3. Prof antwortet ja/nein → Bescheid
 
-### Airtable (nur Stammdaten, kein GDPR-Risiko)
-- **Personen**: Profs/Verantwortliche
-- **Module**: Modul-Metadaten
-- **Units**: Unit-Ebene mit Verantwortlichen-Zuordnung
+### Datenbank: NeonDB (Serverless Postgres)
+- **Personen**: Profs/Verantwortliche (16 entries)
+- **Module**: Modul-Metadaten (30 entries)
+- **Units**: Unit-Ebene mit Verantwortlichen-Zuordnung (72 entries)
 - → Routing-Lookup: Unit-ID → zuständiger Prof
+- **Migration**: `scripts/migrate_airtable_to_neondb.py` (Airtable→NeonDB one-time import)
+- **Admin API**: `/api/admin/*` endpoints für CRUD (Session-Auth via ADMIN_PASSWORD)
 
 ## Matching-API (`matching-api/`)
 
@@ -30,7 +32,7 @@ FastAPI + ChromaDB + Gemini. Auth via `X-API-Key` header.
 **Embedding-Architektur:**
 - ChromaDB: lokaler Vektor-Speicher + Suche (persistent volume)
 - Gemini Embedding API (`gemini-embedding-001`): Text→Vektor
-- Sync: Airtable Units → Gemini (einmalig ~72 calls) → ChromaDB
+- Sync: NeonDB Units → Gemini (einmalig ~72 calls) → ChromaDB
 - Match-Request: Query→Gemini (1 call) → ChromaDB-Suche (lokal)
 - Keine lokalen ML-Libs (kein torch/scipy) → Docker ~100MB, Build ~5s
 
@@ -44,24 +46,42 @@ FastAPI + ChromaDB + Gemini. Auth via `X-API-Key` header.
 
 **LLM:** `gemini-flash-latest` (Gemini 2.5 Flash); ~6s für 2-Unit-Vergleich parallel.
 
-**Deployment:** Hetzner VPS auto-deploy via GitHub Actions (`.github/workflows/deploy.yml`) on push to `main`. URL: `https://matching-api.quietloop.dev`. Port 3008. Env: `GEMINI_API_KEY`, `AIRTABLE_API_KEY`, `SYNC_ON_STARTUP=1`
+**Deployment:** Hetzner VPS auto-deploy via GitHub Actions on push to `main`. URL: `https://matching-api.quietloop.dev`. Port 3008. Env: `DATABASE_URL` (NeonDB unpooled), `ADMIN_PASSWORD`, `GEMINI_API_KEY`, `SYNC_ON_STARTUP=1`, `CHROMADB_PERSISTENT=1`
 
-**Local Development:**
-- `uv run` requires `--env-file .env` flag (doesn't auto-load like python-dotenv)
-- ChromaDB needs `CHROMADB_PERSISTENT=1` in .env; otherwise in-memory (data lost)
-- Commands: `uv run --env-file .env python app.py`, `uv run --env-file .env python scripts/load_units.py --force`
-- Gemini caching not viable (units ~576 tokens < 2048 minimum)
+**Local Dev:**
+- Port 3008 (default; override via `PORT` env var)
+- `uv run --env-file .env python app.py` (doesn't auto-load envs)
+- ChromaDB: `CHROMADB_PERSISTENT=1` required (else in-memory, data lost)
+- CORS allows `localhost:3007` (frontend dev)
 
-## Frontend (geplant)
+## Frontend (`../frontend/`)
 
-Next.js auf Cloudflare Workers. API Route ruft Matching-API mit X-API-Key. Secrets via `wrangler secret put MATCHING_API_KEY`.
+Next.js 15 + shadcn/ui deployed auf Cloudflare Workers via OpenNext.js adapter. URL: `https://anerkennung.quietloop.dev`
 
-Pattern aus `picnic-api-integration/web-ui/src/app/api/categories/route.ts`:
-```typescript
-fetch(process.env.MATCHING_API_URL + '/match', {
-  headers: { 'X-API-Key': process.env.MATCHING_API_KEY }
-})
-```
+**Tech Stack:**
+- Next.js 15.1 (App Router) + React 18
+- shadcn/ui (Radix UI primitives) + Tailwind CSS v4
+- Cloudflare Workers (OpenNext.js)
+
+**3-Step Workflow:**
+1. Input → Module eingeben (Textarea/PDF)
+2. Matches → Top 10 Units auswählen (Checkbox-Liste)
+3. Results → Vergleichsergebnisse + Email/PDF Export
+
+**API Integration:**
+- Proxy-Routes: `/api/{parse,match,compare-multiple}` → matching-api via X-API-Key
+- `lib/matching-service.ts` - Matching API client
+- `lib/admin-service.ts` - Admin API client (session auth)
+
+**Admin UI (`/admin`):**
+- Password auth (ADMIN_PASSWORD); session tokens in sessionStorage
+- CRUD for Units/Module/Personen: `app/admin/{units,modules,personen}/page.tsx`
+- ChromaDB sync button: triggers backend `/api/admin/sync`
+
+**Local Dev:**
+- Port 3007 (all npm scripts: `dev`, `dev:local`, `dev:prod`)
+- `npm run dev:local` - Points to localhost:3008 (overrides NEXT_PUBLIC_MATCHING_API_URL)
+- `npm run dev:prod` - Points to production API (explicit)
 
 ## Datenquellen
 
@@ -72,21 +92,10 @@ fetch(process.env.MATCHING_API_URL + '/match', {
 
 **ChromaDB:** Vector-Store für semantic search (`./data/vectorstore/`)
 
-## Airtable
-
-**Base:** Siehe `.env` für Base ID
-
-| Tabelle | Zweck |
-|---------|-------|
-| Personen | Profs/Verantwortliche |
-| Module | Modul-Metadaten |
-| Units | Unit-Ebene + Verantwortliche |
-
-**Zugriff:** `source .env && AIRTABLE_API_KEY="$AIRTABLE_API_KEY" mcporter airtable.<tool>`
-
 ## Scripts
 
-- `scripts/load_units.py` - Units aus Airtable in ChromaDB laden
+- `scripts/load_units.py` - Units aus NeonDB in ChromaDB syncen
+- `scripts/migrate_airtable_to_neondb.py` - Einmalige Migration Airtable→NeonDB
 
 ## Referenzen
 - TH Lübeck Prototyp: https://github.com/pascalhuerten/recog-ai-demo

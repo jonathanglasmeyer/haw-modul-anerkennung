@@ -80,20 +80,23 @@ class MatchingAssistant:
         self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
         self.model = os.getenv("LLM_MODEL", DEFAULT_MODEL)
 
-    def find_matching_units(self, external_module_text: str, limit: int = 5) -> dict:
+    def find_matching_units(self, external_module_text: str, limit: int = 5, studiengang: str | None = None) -> dict:
         """Find top matching internal units for an external module.
 
         Args:
             external_module_text: Description of the external module/course
             limit: Number of results to return
+            studiengang: Optional studiengang filter (BAPuMa, MAPuMa, BAEGov)
 
         Returns:
             Dict with matches list and timing metadata
         """
         start = time.time()
+        # Query more results if filtering by studiengang to ensure we get enough matches
+        query_limit = limit * 3 if studiengang else limit
         results = self.collection.query(
             query_texts=[external_module_text],
-            n_results=limit,
+            n_results=query_limit,
             include=["documents", "metadatas", "distances"]
         )
         query_time = time.time() - start
@@ -104,12 +107,21 @@ class MatchingAssistant:
             results["metadatas"][0],
             results["distances"][0]
         )):
+            unit_id = meta.get("unit_id", "")
+
+            # Filter by studiengang if specified
+            if studiengang and not unit_id.startswith(studiengang):
+                print(f"[FILTER] Skipping {unit_id} (doesn't match {studiengang})")
+                continue
+            elif studiengang:
+                print(f"[FILTER] Including {unit_id} (matches {studiengang})")
+
             # Convert distance to similarity (cosine distance: 0 = identical)
             similarity = 1 - dist
 
             matches.append({
                 "rank": i + 1,
-                "unit_id": meta.get("unit_id"),
+                "unit_id": unit_id,
                 "unit_title": meta.get("unit_title"),
                 "module_id": meta.get("module_id"),
                 "module_title": meta.get("module_title"),
@@ -122,7 +134,11 @@ class MatchingAssistant:
                 "doc": doc
             })
 
-        logger.info(f"Vector search completed in {query_time:.3f}s (embedding + query)")
+            # Stop once we have enough matches
+            if len(matches) >= limit:
+                break
+
+        logger.info(f"Vector search completed in {query_time:.3f}s (embedding + query), studiengang filter: {studiengang or 'none'}")
         return {
             "matches": matches,
             "timing": {
@@ -301,17 +317,26 @@ Kriterien:
                 "reasoning": "",
             }
 
-    def compare_multiple(self, external_module: dict, unit_ids: list[str]) -> list[dict]:
+    def compare_multiple(self, external_module: dict, unit_ids: list[str], studiengang: str | None = None) -> list[dict]:
         """Compare external module with multiple internal units using parallel single calls.
 
         Args:
             external_module: Parsed external module data
             unit_ids: List of unit IDs to compare against
+            studiengang: Optional studiengang context (BAPuMa, MAPuMa, BAEGov)
 
         Returns:
             List of comparison results with timing metadata
         """
         import concurrent.futures
+
+        # Map studiengang codes to full names
+        studiengang_names = {
+            "BAPuMa": "BA Public Management",
+            "MAPuMa": "MA Public Management",
+            "BAEGov": "BA E-Government"
+        }
+        studiengang_context = f" für den Studiengang {studiengang_names.get(studiengang, studiengang)}" if studiengang else ""
 
         total_start = time.time()
 
@@ -351,7 +376,7 @@ Kriterien:
 **Inhalt:**
 {unit_data['doc']}"""
 
-            prompt = f"""Prüfe, ob externes Modul auf interne Unit anerkennbar ist. Liefere JSON nach Schema:
+            prompt = f"""Prüfe{studiengang_context}, ob externes Modul auf interne Unit anerkennbar ist. Liefere JSON nach Schema:
 {{
   "unit_id": "{unit_data['unit_id']}",
   "lernziele_match": 0-100,

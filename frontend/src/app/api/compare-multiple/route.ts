@@ -3,7 +3,7 @@ import { matchingService, MatchingServiceError } from '@/lib/matching-service'
 
 export async function POST(request: NextRequest) {
   try {
-    const { external_module, unit_ids } = await request.json()
+    const { external_module, unit_ids, studiengang } = await request.json()
 
     if (!external_module || !unit_ids || !Array.isArray(unit_ids)) {
       return NextResponse.json(
@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const data = await matchingService.compareMultiple(external_module, unit_ids)
+    const data = await matchingService.compareMultiple(external_module, unit_ids, studiengang)
     return NextResponse.json(data)
   } catch (error) {
     console.error('Error in /api/compare-multiple:', error)

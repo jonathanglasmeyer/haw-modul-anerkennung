@@ -2,6 +2,7 @@
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -17,13 +18,16 @@ load_dotenv()
 # API Key auth
 API_KEY = os.environ.get("API_KEY")
 
-from matching import MatchingAssistant, sync_from_airtable
+from matching import MatchingAssistant
+from matching.chromadb import ensure_synced
+from admin_routes import router as admin_router
 
 
 # Pydantic models for request/response
 class MatchRequest(BaseModel):
     text: str
     limit: int = 5
+    studiengang: str | None = None
 
 class ParseRequest(BaseModel):
     text: str
@@ -31,14 +35,17 @@ class ParseRequest(BaseModel):
 class CompareRequest(BaseModel):
     external_module: dict
     internal_unit_id: str
+    studiengang: str | None = None
 
 class MatchAndCompareRequest(BaseModel):
     text: str
     auto_compare: bool = False
+    studiengang: str | None = None
 
 class CompareMultipleRequest(BaseModel):
     external_module: dict
     unit_ids: list[str]
+    studiengang: str | None = None
 
 class ExportPDFRequest(BaseModel):
     external_module: dict
@@ -59,9 +66,8 @@ def get_assistant() -> MatchingAssistant:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Optionally sync from Airtable on startup (only if SYNC_ON_STARTUP=1)."""
-    if os.getenv("SYNC_ON_STARTUP", "0") == "1":
-        sync_from_airtable()
+    """Auto-sync from NeonDB on startup."""
+    ensure_synced()
     yield
 
 
@@ -72,11 +78,24 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3007", "https://matching-api.quietloop.dev"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include admin router
+app.include_router(admin_router)
+
 
 @app.middleware("http")
 async def verify_api_key(request: Request, call_next):
-    """Verify API key for all endpoints except /health."""
-    if request.url.path == "/health":
+    """Verify API key for all endpoints except /health and /api/admin/*."""
+    # Skip auth for health check and admin endpoints (admin has its own auth)
+    if request.url.path == "/health" or request.url.path.startswith("/api/admin"):
         return await call_next(request)
 
     # Skip auth if no API_KEY configured (local dev)
@@ -99,8 +118,10 @@ async def health():
 @app.post("/match")
 async def match_units(request: MatchRequest):
     """Find matching internal units for an external module description."""
+    print(f"[MATCH] studiengang={request.studiengang}, limit={request.limit}")
+    ensure_synced()
     assistant = get_assistant()
-    return assistant.find_matching_units(request.text, limit=request.limit)
+    return assistant.find_matching_units(request.text, limit=request.limit, studiengang=request.studiengang)
 
 
 @app.post("/parse")
@@ -113,6 +134,7 @@ async def parse_module(request: ParseRequest):
 @app.post("/compare")
 async def compare_modules(request: CompareRequest):
     """Compare external module with internal unit and get recommendation."""
+    ensure_synced()
     assistant = get_assistant()
     result = assistant.compare_modules(
         request.external_module,
@@ -126,10 +148,13 @@ async def compare_modules(request: CompareRequest):
 @app.post("/compare-multiple")
 async def compare_multiple(request: CompareMultipleRequest):
     """Compare external module with multiple internal units using parallel calls."""
+    print(f"[COMPARE] studiengang={request.studiengang}, unit_ids={request.unit_ids}")
+    ensure_synced()
     assistant = get_assistant()
     result = assistant.compare_multiple(
         request.external_module,
-        request.unit_ids
+        request.unit_ids,
+        studiengang=request.studiengang
     )
     if result.get("error"):
         raise HTTPException(status_code=500, detail=result["error"])
@@ -141,6 +166,7 @@ async def compare_multiple(request: CompareMultipleRequest):
 @app.post("/match-and-compare")
 async def match_and_compare(request: MatchAndCompareRequest):
     """Full pipeline: parse, find matches, optionally compare with top match."""
+    ensure_synced()
     assistant = get_assistant()
 
     # Parse external module

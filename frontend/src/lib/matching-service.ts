@@ -30,10 +30,10 @@ async function fetchAPI(endpoint: string, options: RequestInit = {}) {
 }
 
 export const matchingService = {
-  async match(text: string, limit = 5) {
+  async match(text: string, limit = 5, studiengang?: string) {
     return fetchAPI('/match', {
       method: 'POST',
-      body: JSON.stringify({ text, limit }),
+      body: JSON.stringify({ text, limit, studiengang }),
     })
   },
 
@@ -44,12 +44,13 @@ export const matchingService = {
     })
   },
 
-  async compareMultiple(externalModule: Record<string, unknown>, unitIds: string[]) {
+  async compareMultiple(externalModule: Record<string, unknown>, unitIds: string[], studiengang?: string) {
     return fetchAPI('/compare-multiple', {
       method: 'POST',
       body: JSON.stringify({
         external_module: externalModule,
         unit_ids: unitIds,
+        studiengang,
       }),
     })
   },
